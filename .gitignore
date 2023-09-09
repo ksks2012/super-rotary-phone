@@ -1,0 +1,3 @@
+*.so
+*.sh
+test/*.txt
