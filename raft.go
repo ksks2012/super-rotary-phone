@@ -30,7 +30,7 @@ import (
 	"6.824/src/labrpc"
 )
 
-var TIKER_SLEEP_SEC int64 = 500 //ms
+var TIKER_SLEEP_SEC int64 = 200 //ms
 
 type RaftRole int
 
@@ -171,6 +171,7 @@ func (rf *Raft) RequestHeartbeat(args *AppendEntriesRequest, reply *AppendEntrie
 	reply.Success = true
 	if args.Term < rf.currentTerm {
 		reply.Success = false
+		reply.Term = rf.currentTerm
 	}
 	rf.currentTerm = args.Term
 	rf.heartsbeats = true
@@ -203,14 +204,19 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	// rf.mu.Lock()
+	// defer rf.mu.Unlock()
 
 	reply.Term = 0
 	reply.VoteGranted = false
 
 	if args.Term <= rf.currentTerm || rf.role == Candidate {
 		rf.role = Follower
+		return
+	}
+	if args.Term > rf.currentTerm && rf.role == Leader {
+		rf.role = Follower
+		rf.votedFor = -1
 		return
 	}
 
@@ -312,19 +318,89 @@ func (rf *Raft) triggerHeartbeat() {
 	}
 
 	rf.disconnect = 0
+
+	lengthPeers := len(rf.peers)
+	totalHeartsbeat := make(chan int, lengthPeers)
+	var wg sync.WaitGroup
+	wg.Add(lengthPeers)
+	for i := 0; i < lengthPeers; i++ {
+		go func(i int) {
+			defer wg.Done()
+			appendEntriesReply := AppendEntriesReply{}
+			if i != rf.me {
+				rf.sendHeartbeat(i, &appendEntriesRequest, &appendEntriesReply)
+			}
+			if appendEntriesReply.Success == true {
+				totalHeartsbeat <- 1
+			} else {
+				totalHeartsbeat <- 0
+				rf.disconnect += 1
+			}
+			// if appendEntriesReply.Term > rf.currentTerm {
+			// 	rf.role = Follower
+			// 	rf.votedFor = -1
+			// 	rf.heartsbeats = false
+			// 	rf.triggerElection()
+			// }
+		}(i)
+	}
+	wg.Wait()
 	var heartsbeatCount = 1
-	for i := 0; i < len(rf.peers); i++ {
-		appendEntriesReply := AppendEntriesReply{}
-		if i != rf.me {
-			rf.sendHeartbeat(i, &appendEntriesRequest, &appendEntriesReply)
-		}
-		if appendEntriesReply.Success == true {
-			heartsbeatCount += 1
-		} else {
-			rf.disconnect += 1
-		}
+	for i := 0; i < lengthPeers; i++ {
+		heartsbeatCount += <-totalHeartsbeat
 	}
 	fmt.Printf("[triggerHeartbeat %v] heartsbeatCount: %v\n", rf.me, heartsbeatCount)
+}
+
+func (rf *Raft) triggerElection() {
+	requestVoteArgs := RequestVoteArgs{
+		Term:        rf.currentTerm + 1,
+		CandidateId: rf.me,
+		// TODO:
+		LastLogIndex: 0,
+		LastLogTerm:  rf.currentTerm,
+	}
+
+	rf.mu.Lock()
+	rf.votedFor = rf.me
+	rf.role = Candidate
+	rf.mu.Unlock()
+
+	lengthPeers := len(rf.peers)
+	totalLengthChen := make(chan int, lengthPeers)
+	var wg sync.WaitGroup
+	wg.Add(lengthPeers)
+	for i := 0; i < len(rf.peers); i++ {
+		go func(i int) {
+			defer wg.Done()
+			requestVoteReply := RequestVoteReply{}
+			if i != rf.me {
+				rf.sendRequestVote(i, &requestVoteArgs, &requestVoteReply)
+			}
+			if requestVoteReply.VoteGranted == true {
+				totalLengthChen <- 1
+			} else {
+				totalLengthChen <- 0
+			}
+		}(i)
+	}
+	wg.Wait()
+	// How much votes have been
+	var voteCount = 1
+	for i := 0; i < lengthPeers; i++ {
+		voteCount += <-totalLengthChen
+	}
+
+	rf.mu.Lock()
+	if voteCount >= (len(rf.peers)+1)/2 {
+		rf.role = Leader
+		rf.triggerHeartbeat()
+	} else {
+		rf.role = Follower
+	}
+	rf.currentTerm = requestVoteArgs.Term
+	rf.mu.Unlock()
+	fmt.Printf("[triggerElection %v] voteCount: %v %v\n", rf.me, voteCount, (len(rf.peers)+1)/2)
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
@@ -338,65 +414,18 @@ func (rf *Raft) ticker() {
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
-		sleepSeconds := TIKER_SLEEP_SEC + (rand.Int63() % TIKER_SLEEP_SEC)
+		sleepSeconds := TIKER_SLEEP_SEC + (rand.Int63() % (TIKER_SLEEP_SEC * 5))
 		time.Sleep(time.Duration(sleepSeconds) * time.Millisecond)
 
 		if rf.role != Leader && rf.votedFor == -1 && rf.heartsbeats == false {
-
-			requestVoteArgs := RequestVoteArgs{
-				Term:        rf.currentTerm + 1,
-				CandidateId: rf.me,
-				// TODO:
-				LastLogIndex: 0,
-				LastLogTerm:  rf.currentTerm,
-			}
-
-			rf.mu.Lock()
-			rf.votedFor = rf.me
-			rf.role = Candidate
-			rf.mu.Unlock()
-
-			lengthPeers := len(rf.peers)
-			totalLengthChen := make(chan int, lengthPeers)
-			var wg sync.WaitGroup
-			wg.Add(lengthPeers)
-			for i := 0; i < len(rf.peers); i++ {
-				go func(i int) {
-					defer wg.Done()
-					requestVoteReply := RequestVoteReply{}
-					if i != rf.me {
-						rf.sendRequestVote(i, &requestVoteArgs, &requestVoteReply)
-					}
-					if requestVoteReply.VoteGranted == true {
-						// voteCount += 1
-						totalLengthChen <- 1
-					} else {
-						totalLengthChen <- 0
-					}
-				}(i)
-			}
-			wg.Wait()
-			// How much votes have been
-			var voteCount = 1
-			for i := 0; i < lengthPeers; i++ {
-				voteCount += <-totalLengthChen
-			}
-
-			rf.mu.Lock()
-			if voteCount >= (len(rf.peers)+1)/2 {
-				rf.role = Leader
-				rf.triggerHeartbeat()
-			} else {
-				rf.role = Follower
-			}
-			rf.currentTerm = requestVoteArgs.Term
-			rf.mu.Unlock()
-			fmt.Printf("[ticker %v] voteCount: %v %v\n", rf.me, voteCount, (len(rf.peers)+1)/2)
+			rf.triggerElection()
 		}
 
 		// Re-initialize rf
+		rf.mu.Lock()
 		rf.votedFor = -1
 		rf.heartsbeats = false
+		rf.mu.Unlock()
 
 		fmt.Printf("[ticker %v] %+v\n", rf.me, rf)
 	}
