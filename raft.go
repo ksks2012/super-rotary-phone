@@ -349,42 +349,53 @@ func (rf *Raft) ticker() {
 				LastLogTerm:  rf.currentTerm,
 			}
 
-			rf.votedFor = rf.me
-			// How much votes have been
-			var voteCount = 1
-			rf.role = Candidate
-
 			rf.mu.Lock()
-			for i := 0; i < len(rf.peers); i++ {
-				requestVoteReply := RequestVoteReply{}
-				if i != rf.me {
-					rf.sendRequestVote(i, &requestVoteArgs, &requestVoteReply)
-				}
-				if requestVoteReply.VoteGranted == true {
-					voteCount += 1
-				}
-			}
+			rf.votedFor = rf.me
+			rf.role = Candidate
 			rf.mu.Unlock()
 
-			fmt.Printf("[ticker %v] voteCount: %v %v\n", rf.me, voteCount, (len(rf.peers)-rf.disconnect)/2+1)
+			lengthPeers := len(rf.peers)
+			totalLengthChen := make(chan int, lengthPeers)
+			var wg sync.WaitGroup
+			wg.Add(lengthPeers)
+			for i := 0; i < len(rf.peers); i++ {
+				go func(i int) {
+					defer wg.Done()
+					requestVoteReply := RequestVoteReply{}
+					if i != rf.me {
+						rf.sendRequestVote(i, &requestVoteArgs, &requestVoteReply)
+					}
+					if requestVoteReply.VoteGranted == true {
+						// voteCount += 1
+						totalLengthChen <- 1
+					} else {
+						totalLengthChen <- 0
+					}
+				}(i)
+			}
+			wg.Wait()
+			// How much votes have been
+			var voteCount = 1
+			for i := 0; i < lengthPeers; i++ {
+				voteCount += <-totalLengthChen
+			}
 
-			// if voteCount == 1 {
-			// 	rf.role = Follower
-			// } else
-			if voteCount >= (len(rf.peers))/2+1 {
+			rf.mu.Lock()
+			if voteCount >= (len(rf.peers)+1)/2 {
 				rf.role = Leader
 			} else {
 				rf.role = Follower
 			}
 			rf.currentTerm = requestVoteArgs.Term
-
+			rf.mu.Unlock()
+			fmt.Printf("[ticker %v] voteCount: %v %v\n", rf.me, voteCount, (len(rf.peers)+1)/2)
 		}
 
 		// Re-initialize rf
 		rf.votedFor = -1
 		rf.heartsbeats = false
 
-		fmt.Printf("[ticker %v] %v %v\n", rf.me, rf.role == Leader, rf.currentTerm)
+		fmt.Printf("[ticker %v] %+v\n", rf.me, rf)
 	}
 }
 
