@@ -30,6 +30,8 @@ import (
 	"6.824/src/labrpc"
 )
 
+var TIKER_SLEEP_SEC int64 = 500 //ms
+
 type RaftRole int
 
 const (
@@ -84,15 +86,15 @@ type Raft struct {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
 	var term int
 	var isleader bool
 	// Your code here (2A).
-	// rf.mu.Lock()
 	term = rf.currentTerm
 	isleader = (rf.role == Leader)
-	// rf.mu.Unlock()
-	fmt.Printf("[GetState %v] %v %v %v\n", rf.me, isleader, (rf.role), term)
+	fmt.Printf("[GetState %v] %+v\n", rf.me, rf)
 	return term, isleader
 }
 
@@ -302,44 +304,44 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+func (rf *Raft) triggerHeartbeat() {
+	rf.heartsbeats = true
+	appendEntriesRequest := AppendEntriesRequest{
+		Term:     rf.currentTerm,
+		LeaderId: rf.me,
+	}
+
+	rf.disconnect = 0
+	var heartsbeatCount = 1
+	for i := 0; i < len(rf.peers); i++ {
+		appendEntriesReply := AppendEntriesReply{}
+		if i != rf.me {
+			rf.sendHeartbeat(i, &appendEntriesRequest, &appendEntriesReply)
+		}
+		if appendEntriesReply.Success == true {
+			heartsbeatCount += 1
+		} else {
+			rf.disconnect += 1
+		}
+	}
+	fmt.Printf("[triggerHeartbeat %v] heartsbeatCount: %v\n", rf.me, heartsbeatCount)
+}
+
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		if rf.role == Leader {
-			rf.heartsbeats = true
-			appendEntriesRequest := AppendEntriesRequest{
-				Term:     rf.currentTerm,
-				LeaderId: rf.me,
-			}
-
-			rf.disconnect = 0
-			var heartsbeatCount = 1
-			for i := 0; i < len(rf.peers); i++ {
-				appendEntriesReply := AppendEntriesReply{}
-				if i != rf.me {
-					rf.sendHeartbeat(i, &appendEntriesRequest, &appendEntriesReply)
-				}
-				if appendEntriesReply.Success == true {
-					heartsbeatCount += 1
-				} else {
-					rf.disconnect += 1
-				}
-			}
-			fmt.Printf("[ticker %v] heartsbeatCount: %v\n", rf.me, heartsbeatCount)
-			// if heartsbeatCount < (len(rf.peers))/2+1 {
-			// 	rf.role = Candidate
-			// }
+			rf.triggerHeartbeat()
 		}
 
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
-		sleepSeconds := 50 + (rand.Int63() % 1000)
+		sleepSeconds := TIKER_SLEEP_SEC + (rand.Int63() % TIKER_SLEEP_SEC)
 		time.Sleep(time.Duration(sleepSeconds) * time.Millisecond)
-		fmt.Printf("[ticker %v] sleepSeconds: %v\n", rf.me, sleepSeconds)
 
-		if rf.votedFor == -1 && rf.heartsbeats == false {
+		if rf.role != Leader && rf.votedFor == -1 && rf.heartsbeats == false {
 
 			requestVoteArgs := RequestVoteArgs{
 				Term:        rf.currentTerm + 1,
@@ -383,6 +385,7 @@ func (rf *Raft) ticker() {
 			rf.mu.Lock()
 			if voteCount >= (len(rf.peers)+1)/2 {
 				rf.role = Leader
+				rf.triggerHeartbeat()
 			} else {
 				rf.role = Follower
 			}
