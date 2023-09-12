@@ -30,7 +30,8 @@ import (
 	"6.824/src/labrpc"
 )
 
-var TIKER_SLEEP_SEC int64 = 200 //ms
+var TIKER_SLEEP_SEC int64 = 200     //ms
+var HEATHBEAT_SLEEP_SEC int64 = 100 //ms
 
 type RaftRole int
 
@@ -76,6 +77,11 @@ type Raft struct {
 	votedFor    int
 	heartsbeats bool
 	disconnect  int
+
+	// timer
+	electionTimer  *time.Ticker
+	heartbeatTimer *time.Ticker
+
 	// TODO: Structure for Log Entries
 	logEntries interface{}
 	// Look at the paper's Figure 2 for a description of what
@@ -204,8 +210,8 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	// rf.mu.Lock()
-	// defer rf.mu.Unlock()
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
 	reply.Term = 0
 	reply.VoteGranted = false
@@ -403,22 +409,35 @@ func (rf *Raft) triggerElection() {
 	fmt.Printf("[triggerElection %v] voteCount: %v %v\n", rf.me, voteCount, (len(rf.peers)+1)/2)
 }
 
+func (rf *Raft) heartbeater() {
+	defer rf.heartbeatTimer.Stop()
+
+	for rf.killed() == false {
+		select {
+		case <-rf.heartbeatTimer.C:
+			if rf.role == Leader {
+				sleepSeconds := HEATHBEAT_SLEEP_SEC + (rand.Int63() % (HEATHBEAT_SLEEP_SEC))
+				rf.heartbeatTimer.Reset(time.Duration(sleepSeconds) * time.Millisecond)
+				rf.triggerHeartbeat()
+			}
+		}
+		fmt.Printf("[heartbeater %v] %+v\n", rf.me, rf)
+	}
+}
+
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
+	defer rf.electionTimer.Stop()
+
 	for rf.killed() == false {
-		if rf.role == Leader {
-			rf.triggerHeartbeat()
-		}
-
-		// Your code here to check if a leader election should
-		// be started and to randomize sleeping time using
-		// time.Sleep().
-		sleepSeconds := TIKER_SLEEP_SEC + (rand.Int63() % (TIKER_SLEEP_SEC * 5))
-		time.Sleep(time.Duration(sleepSeconds) * time.Millisecond)
-
-		if rf.role != Leader && rf.votedFor == -1 && rf.heartsbeats == false {
-			rf.triggerElection()
+		select {
+		case <-rf.electionTimer.C:
+			if rf.role != Leader && rf.votedFor == -1 && rf.heartsbeats == false {
+				sleepSeconds := TIKER_SLEEP_SEC + (rand.Int63() % (TIKER_SLEEP_SEC))
+				rf.electionTimer.Reset(time.Duration(sleepSeconds) * time.Millisecond)
+				rf.triggerElection()
+			}
 		}
 
 		// Re-initialize rf
@@ -458,6 +477,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
+	sleepSeconds := TIKER_SLEEP_SEC + (rand.Int63() % (TIKER_SLEEP_SEC))
+	rf.electionTimer = time.NewTicker(time.Duration(sleepSeconds) * time.Millisecond)
+
+	sleepSeconds = HEATHBEAT_SLEEP_SEC + (rand.Int63() % (HEATHBEAT_SLEEP_SEC))
+	rf.heartbeatTimer = time.NewTicker(time.Duration(sleepSeconds) * time.Millisecond)
+
+	go rf.heartbeater()
 	go rf.ticker()
 
 	return rf
