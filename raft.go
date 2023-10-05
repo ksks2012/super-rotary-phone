@@ -182,7 +182,11 @@ func (rf *Raft) RequestHeartbeat(args *AppendEntriesRequest, reply *AppendEntrie
 	}
 	rf.currentTerm = args.Term
 	rf.heartsbeats = true
-	rf.votedFor = args.LeaderId
+	rf.votedFor = -1
+
+	// Reset election timer
+	sleepSeconds := TIKER_SLEEP_SEC + (rand.Int63() % (TIKER_SLEEP_SEC))
+	rf.electionTimer.Reset(time.Duration(sleepSeconds) * time.Millisecond)
 
 	// TODO: Check log prevLogIndex, prevLogTerm
 	// TODO: Check entries
@@ -218,13 +222,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.VoteGranted = false
 
 	if args.Term <= rf.currentTerm || rf.role == Candidate {
-		rf.role = Follower
 		return
 	}
 	if args.Term > rf.currentTerm && rf.role == Leader {
 		rf.role = Follower
 		rf.votedFor = -1
-		return
 	}
 
 	fmt.Printf("[RequestVote %v] %v %v\n", rf.me, rf.votedFor, args.CandidateId)
@@ -428,13 +430,13 @@ func (rf *Raft) heartbeater() {
 	for rf.killed() == false {
 		select {
 		case <-rf.heartbeatTimer.C:
+			sleepSeconds := HEATHBEAT_SLEEP_SEC + (rand.Int63() % (HEATHBEAT_SLEEP_SEC))
+			rf.heartbeatTimer.Reset(time.Duration(sleepSeconds) * time.Millisecond)
 			if rf.role == Leader {
-				sleepSeconds := HEATHBEAT_SLEEP_SEC + (rand.Int63() % (HEATHBEAT_SLEEP_SEC))
-				rf.heartbeatTimer.Reset(time.Duration(sleepSeconds) * time.Millisecond)
 				rf.triggerHeartbeat()
+				fmt.Printf("[heartbeater %v] %+v\n", rf.me, rf)
 			}
 		}
-		fmt.Printf("[heartbeater %v] %+v\n", rf.me, rf)
 	}
 }
 
@@ -446,20 +448,16 @@ func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		select {
 		case <-rf.electionTimer.C:
-			if rf.role != Leader && rf.votedFor == -1 && rf.heartsbeats == false {
-				sleepSeconds := TIKER_SLEEP_SEC + (rand.Int63() % (TIKER_SLEEP_SEC))
-				rf.electionTimer.Reset(time.Duration(sleepSeconds) * time.Millisecond)
+			sleepSeconds := TIKER_SLEEP_SEC + (rand.Int63() % (TIKER_SLEEP_SEC))
+			rf.electionTimer.Reset(time.Duration(sleepSeconds) * time.Millisecond)
+			// if rf.role != Leader && rf.votedFor == -1 && rf.heartsbeats == false {
+			if rf.role != Leader && rf.votedFor == -1 {
+				// TODO: Pre Election
+				// rf.triggerPreElection()
+				fmt.Printf("[ticker %v] %+v\n", rf.me, rf)
 				rf.triggerElection()
 			}
 		}
-
-		// Re-initialize rf
-		rf.mu.Lock()
-		rf.votedFor = -1
-		rf.heartsbeats = false
-		rf.mu.Unlock()
-
-		fmt.Printf("[ticker %v] %+v\n", rf.me, rf)
 	}
 }
 
