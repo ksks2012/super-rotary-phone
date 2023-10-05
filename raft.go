@@ -32,6 +32,7 @@ import (
 
 var TIKER_SLEEP_SEC int64 = 200     //ms
 var HEATHBEAT_SLEEP_SEC int64 = 100 //ms
+var RPC_TIMEOUT_SEC int64 = 50      //ms
 
 type RaftRole int
 
@@ -373,7 +374,7 @@ func (rf *Raft) triggerElection() {
 	rf.mu.Unlock()
 
 	lengthPeers := len(rf.peers)
-	totalLengthChen := make(chan int, lengthPeers)
+	totalLengthChen := make(chan int, lengthPeers-1)
 	var wg sync.WaitGroup
 	wg.Add(lengthPeers)
 	for i := 0; i < len(rf.peers); i++ {
@@ -381,19 +382,31 @@ func (rf *Raft) triggerElection() {
 			defer wg.Done()
 			requestVoteReply := RequestVoteReply{}
 			if i != rf.me {
-				rf.sendRequestVote(i, &requestVoteArgs, &requestVoteReply)
-			}
-			if requestVoteReply.VoteGranted == true {
-				totalLengthChen <- 1
-			} else {
-				totalLengthChen <- 0
+				c := make(chan bool, 1)
+				go func() {
+					c <- rf.sendRequestVote(i, &requestVoteArgs, &requestVoteReply)
+				}()
+				select {
+				case err := <-c:
+					// use err and result
+					fmt.Printf("[triggerElection %v] %v\n", rf.me, err)
+					if requestVoteReply.VoteGranted == true {
+						totalLengthChen <- 1
+					} else {
+						totalLengthChen <- 0
+					}
+				case <-time.After(time.Duration(RPC_TIMEOUT_SEC) * time.Millisecond):
+					// call timed out
+					fmt.Printf("[triggerElection %v] timeout\n", rf.me)
+					totalLengthChen <- 0
+				}
 			}
 		}(i)
 	}
 	wg.Wait()
 	// How much votes have been
 	var voteCount = 1
-	for i := 0; i < lengthPeers; i++ {
+	for i := 0; i < lengthPeers-1; i++ {
 		voteCount += <-totalLengthChen
 	}
 
