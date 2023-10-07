@@ -329,7 +329,7 @@ func (rf *Raft) triggerHeartbeat() {
 	rf.disconnect = 0
 
 	lengthPeers := len(rf.peers)
-	totalHeartsbeat := make(chan int, lengthPeers)
+	totalHeartsbeat := make(chan int, lengthPeers-1)
 	var wg sync.WaitGroup
 	wg.Add(lengthPeers)
 	for i := 0; i < lengthPeers; i++ {
@@ -337,25 +337,34 @@ func (rf *Raft) triggerHeartbeat() {
 			defer wg.Done()
 			appendEntriesReply := AppendEntriesReply{}
 			if i != rf.me {
-				rf.sendHeartbeat(i, &appendEntriesRequest, &appendEntriesReply)
+				c := make(chan bool, 1)
+				go func() {
+					c <- rf.sendHeartbeat(i, &appendEntriesRequest, &appendEntriesReply)
+				}()
+				select {
+				case err := <-c:
+					// use err and result
+					fmt.Printf("[triggerHeartbeat %v] %v\n", rf.me, err)
+					if appendEntriesReply.Success == true {
+						totalHeartsbeat <- 1
+					} else {
+						totalHeartsbeat <- 0
+					}
+					if appendEntriesReply.Term > rf.currentTerm {
+						rf.role = Follower
+						rf.votedFor = -1
+					}
+				case <-time.After(time.Duration(RPC_TIMEOUT_SEC) * time.Millisecond):
+					// call timed out
+					fmt.Printf("[triggerHeartbeat %v] timeout\n", rf.me)
+					totalHeartsbeat <- 0
+				}
 			}
-			if appendEntriesReply.Success == true {
-				totalHeartsbeat <- 1
-			} else {
-				totalHeartsbeat <- 0
-				rf.disconnect += 1
-			}
-			// if appendEntriesReply.Term > rf.currentTerm {
-			// 	rf.role = Follower
-			// 	rf.votedFor = -1
-			// 	rf.heartsbeats = false
-			// 	rf.triggerElection()
-			// }
 		}(i)
 	}
 	wg.Wait()
 	var heartsbeatCount = 1
-	for i := 0; i < lengthPeers; i++ {
+	for i := 0; i < lengthPeers-1; i++ {
 		heartsbeatCount += <-totalHeartsbeat
 	}
 	fmt.Printf("[triggerHeartbeat %v] heartsbeatCount: %v\n", rf.me, heartsbeatCount)
