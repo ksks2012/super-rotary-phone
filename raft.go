@@ -459,12 +459,11 @@ func (rf *Raft) ticker() {
 		case <-rf.electionTimer.C:
 			sleepSeconds := TIKER_SLEEP_SEC + (rand.Int63() % (TIKER_SLEEP_SEC))
 			rf.electionTimer.Reset(time.Duration(sleepSeconds) * time.Millisecond)
-			// if rf.role != Leader && rf.votedFor == -1 && rf.heartsbeats == false {
-			if rf.role != Leader && rf.votedFor == -1 {
+			if rf.role != Leader {
 				// TODO: Pre Election
 				// rf.triggerPreElection()
-				fmt.Printf("[ticker %v] %+v\n", rf.me, rf)
 				rf.triggerElection()
+				fmt.Printf("[ticker %v] %+v\n", rf.me, rf)
 			}
 		}
 	}
