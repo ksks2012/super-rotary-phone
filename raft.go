@@ -179,10 +179,12 @@ func (rf *Raft) RequestHeartbeat(args *AppendEntriesRequest, reply *AppendEntrie
 	if args.Term < rf.currentTerm {
 		reply.Success = false
 		reply.Term = rf.currentTerm
+		return
 	}
+	rf.role = Follower
 	rf.currentTerm = args.Term
 	rf.heartsbeats = true
-	rf.votedFor = -1
+	rf.votedFor = args.LeaderId
 
 	// Reset election timer
 	sleepSeconds := TIKER_SLEEP_SEC + (rand.Int63() % (TIKER_SLEEP_SEC))
@@ -224,7 +226,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term <= rf.currentTerm || rf.role == Candidate {
 		return
 	}
-	if args.Term > rf.currentTerm && rf.role == Leader {
+
+	if rf.role == Leader {
 		rf.role = Follower
 		rf.votedFor = -1
 	}
@@ -422,13 +425,14 @@ func (rf *Raft) triggerElection() {
 	}
 
 	rf.mu.Lock()
+	rf.currentTerm = requestVoteArgs.Term
 	if voteCount >= (len(rf.peers)+1)/2 {
 		rf.role = Leader
 		rf.triggerHeartbeat()
 	} else {
 		rf.role = Follower
+		rf.votedFor = -1
 	}
-	rf.currentTerm = requestVoteArgs.Term
 	rf.mu.Unlock()
 	fmt.Printf("[triggerElection %v] voteCount: %v %v\n", rf.me, voteCount, (len(rf.peers)+1)/2)
 }
