@@ -101,7 +101,7 @@ func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
 	term = rf.currentTerm
 	isleader = (rf.role == Leader)
-	fmt.Printf("[GetState %v] %+v\n", rf.me, rf)
+	fmt.Printf("[GetState] Raft: %v | Term: %v | Role: %v | Vote for %v\n", rf.me, rf.currentTerm, rf.role, rf.votedFor)
 	return term, isleader
 }
 
@@ -220,6 +220,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	fmt.Printf("[RequestVote] Raft: %v | Term: %v | Role: %v | Votereq from %v(%v)\n", rf.me, rf.currentTerm, rf.role, args.CandidateId, args.Term)
 	reply.Term = 0
 	reply.VoteGranted = false
 
@@ -232,8 +233,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.votedFor = -1
 	}
 
-	fmt.Printf("[RequestVote %v] %v %v\n", rf.me, rf.votedFor, args.CandidateId)
-
 	if rf.votedFor == -1 {
 		reply.Term = args.Term
 		reply.VoteGranted = true
@@ -242,6 +241,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.votedFor = args.CandidateId
 		rf.currentTerm = args.Term
 	}
+	fmt.Printf("[RequestVote] Raft: %v | Term: %v | Role: %v | Vote %v\n", rf.me, rf.currentTerm, rf.role, rf.votedFor)
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -359,7 +359,7 @@ func (rf *Raft) triggerHeartbeat() {
 					}
 				case <-time.After(time.Duration(RPC_TIMEOUT_SEC) * time.Millisecond):
 					// call timed out
-					fmt.Printf("[triggerHeartbeat %v] timeout\n", rf.me)
+					fmt.Printf("[triggerHeartbeat] Raft: %v | Term: %v | Role: %v | Timeout\n", rf.me, rf.currentTerm, rf.role)
 					totalHeartsbeat <- 0
 				}
 			}
@@ -370,7 +370,7 @@ func (rf *Raft) triggerHeartbeat() {
 	for i := 0; i < lengthPeers-1; i++ {
 		heartsbeatCount += <-totalHeartsbeat
 	}
-	fmt.Printf("[triggerHeartbeat %v] heartsbeatCount: %v\n", rf.me, heartsbeatCount)
+	fmt.Printf("[triggerHeartbeat] Raft: %v | Term: %v | Role: %v | heartsbeatCount: %v\n", rf.me, rf.currentTerm, rf.role, heartsbeatCount)
 }
 
 func (rf *Raft) triggerElection() {
@@ -407,11 +407,12 @@ func (rf *Raft) triggerElection() {
 					if requestVoteReply.VoteGranted == true {
 						totalLengthChen <- 1
 					} else {
+						fmt.Printf("[triggerElection] Raft: %v | Term: %v | Role: %v | fail by %v: %+v\n", rf.me, rf.currentTerm, rf.role, i, requestVoteReply)
 						totalLengthChen <- 0
 					}
 				case <-time.After(time.Duration(RPC_TIMEOUT_SEC) * time.Millisecond):
 					// call timed out
-					fmt.Printf("[triggerElection %v] timeout\n", rf.me)
+					fmt.Printf("[triggerElection] Raft: %v | Term: %v | Role: %v | Timeout\n", rf.me, rf.currentTerm, rf.role)
 					totalLengthChen <- 0
 				}
 			}
@@ -434,7 +435,7 @@ func (rf *Raft) triggerElection() {
 		rf.votedFor = -1
 	}
 	rf.mu.Unlock()
-	fmt.Printf("[triggerElection %v] voteCount: %v %v\n", rf.me, voteCount, (len(rf.peers)+1)/2)
+	fmt.Printf("[triggerElection] Raft: %v | Term: %v | Role: %v | voteCount: %v, threshold: %v\n", rf.me, rf.currentTerm, rf.role, voteCount, (len(rf.peers)+1)/2)
 }
 
 func (rf *Raft) heartbeater() {
@@ -447,7 +448,7 @@ func (rf *Raft) heartbeater() {
 			rf.heartbeatTimer.Reset(time.Duration(sleepSeconds) * time.Millisecond)
 			if rf.role == Leader {
 				rf.triggerHeartbeat()
-				fmt.Printf("[heartbeater %v] %+v\n", rf.me, rf)
+				fmt.Printf("[heartbeater] Raft: %v | Term: %v | Role: %v\n", rf.me, rf.currentTerm, rf.role)
 			}
 		}
 	}
@@ -467,7 +468,7 @@ func (rf *Raft) ticker() {
 				// TODO: Pre Election
 				// rf.triggerPreElection()
 				rf.triggerElection()
-				fmt.Printf("[ticker %v] %+v\n", rf.me, rf)
+				fmt.Printf("[ticker] Raft: %v | Term: %v | Role: %v\n", rf.me, rf.currentTerm, rf.role)
 			}
 		}
 	}
