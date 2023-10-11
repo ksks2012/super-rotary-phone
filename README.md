@@ -29,11 +29,11 @@
 
 ### Goal
 
-- [ ]  a single leader to be elected
-- [ ]  the leader to remain the leader if there are no failures
-- [ ]  a new leader to take over
-    - [ ]  if the old leader fails
-    - [ ]  if packets to/from the old leader are lost
+- [x]  a single leader to be elected
+- [x]  the leader to remain the leader if there are no failures
+- [x]  a new leader to take over
+    - [x]  if the old leader fails
+    - [x]  if packets to/from the old leader are lost
 
 ### Hint
 
