@@ -224,16 +224,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.Term = 0
 	reply.VoteGranted = false
 
-	if args.Term <= rf.currentTerm || rf.role == Candidate {
-		return
-	}
-
-	if rf.role == Leader {
-		rf.role = Follower
-		rf.votedFor = -1
-	}
-
-	if rf.votedFor == -1 {
+	if args.Term > rf.currentTerm && rf.role != Candidate {
 		reply.Term = args.Term
 		reply.VoteGranted = true
 
