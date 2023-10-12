@@ -71,23 +71,16 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
-	// Your data here (2A, 2B, 2C).
-	// 2A
-	role        RaftRole
-	currentTerm int
-	votedFor    int
-	heartsbeats bool
-	disconnect  int
-
 	// timer
 	electionTimer  *time.Ticker
 	heartbeatTimer *time.Ticker
 
-	// TODO: Structure for Log Entries
-	logEntries interface{}
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-
+	role        RaftRole
+	currentTerm int
+	votedFor    int
+	logEntries  []interface{}
 }
 
 // return currentTerm and whether this server
@@ -183,7 +176,6 @@ func (rf *Raft) RequestHeartbeat(args *AppendEntriesRequest, reply *AppendEntrie
 	}
 	rf.role = Follower
 	rf.currentTerm = args.Term
-	rf.heartsbeats = true
 	rf.votedFor = args.LeaderId
 
 	// Reset election timer
@@ -314,13 +306,10 @@ func (rf *Raft) killed() bool {
 }
 
 func (rf *Raft) triggerHeartbeat() {
-	rf.heartsbeats = true
 	appendEntriesRequest := AppendEntriesRequest{
 		Term:     rf.currentTerm,
 		LeaderId: rf.me,
 	}
-
-	rf.disconnect = 0
 
 	lengthPeers := len(rf.peers)
 	totalHeartsbeat := make(chan int, lengthPeers-1)
@@ -352,6 +341,7 @@ func (rf *Raft) triggerHeartbeat() {
 					// call timed out
 					fmt.Printf("[triggerHeartbeat] Raft: %v | Term: %v | Role: %v | Timeout\n", rf.me, rf.currentTerm, rf.role)
 					totalHeartsbeat <- 0
+					// TODO: retry if appendEntry failed
 				}
 			}
 		}(i)
@@ -485,7 +475,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// 2A: initialize
 	rf.currentTerm = 0
 	rf.votedFor = -1
-	rf.heartsbeats = false
 	rf.role = Follower
 
 	// initialize from state persisted before a crash
