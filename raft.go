@@ -76,10 +76,12 @@ type Raft struct {
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
+	applyCh   chan ApplyMsg
 
 	// timer
 	electionTimer  *time.Ticker
 	heartbeatTimer *time.Ticker
+	applyLogTimer  *time.Ticker
 
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -574,6 +576,37 @@ func (rf *Raft) ticker() {
 	}
 }
 
+func (rf *Raft) applyLog() {
+	defer rf.applyLogTimer.Stop()
+
+	for rf.killed() == false {
+		select {
+		case <-rf.applyLogTimer.C:
+			sleepSeconds := HEATHBEAT_SLEEP_SEC + (rand.Int63() % (HEATHBEAT_SLEEP_SEC))
+			rf.applyLogTimer.Reset(time.Duration(sleepSeconds) * time.Millisecond)
+
+			fmt.Printf("[applyLog] Raft: %v | Term: %v | Role: %v | lastApplied: %v | rf.commitIndex: %v | log size: %v\n", rf.me, rf.currentTerm, rf.role, rf.lastApplied, rf.commitIndex, len(rf.logEntries))
+			i := rf.commitIndex
+			if i <= 0 || i > len(rf.logEntries) {
+				break
+			}
+
+			log := rf.logEntries[i-1]
+			fmt.Printf("[applyLog] log: %+v\n", log)
+			if log.Index > rf.commitIndex {
+				break
+			}
+
+			msg := ApplyMsg{CommandValid: true, Command: log.Value, CommandIndex: log.Index + 1}
+			select {
+			case rf.applyCh <- msg:
+				fmt.Printf("[applyLog] Raft: %v | Term: %v | Role: %v | lastApplied: %v | msg.CommandIndex: %v\n", rf.me, rf.currentTerm, rf.role, rf.lastApplied, msg.CommandIndex)
+				rf.lastApplied = Max(rf.lastApplied, msg.CommandIndex)
+			}
+		}
+	}
+}
+
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
 // server's port is peers[me]. all the servers' peers[] arrays
@@ -589,6 +622,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.applyCh = applyCh
 
 	// Your initialization code here (2A, 2B, 2C).
 	// 2A: initialize
@@ -610,8 +644,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	sleepSeconds = HEATHBEAT_SLEEP_SEC + (rand.Int63() % (HEATHBEAT_SLEEP_SEC))
 	rf.heartbeatTimer = time.NewTicker(time.Duration(sleepSeconds) * time.Millisecond)
 
+	// NOTE: self timer?
+	sleepSeconds = HEATHBEAT_SLEEP_SEC + (rand.Int63() % (HEATHBEAT_SLEEP_SEC))
+	rf.applyLogTimer = time.NewTicker(time.Duration(sleepSeconds) * time.Millisecond)
+
 	go rf.heartbeater()
 	go rf.ticker()
+	go rf.applyLog()
 
 	return rf
 }
