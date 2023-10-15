@@ -69,6 +69,15 @@
     ```
     
 
+## **Part 2B**
+
+- RequestVote RPC
+    - lastLogIndex
+    - lastLogTerm
+- Leader
+    - nextIndex
+    - matchIndex
+
 # Implement
 
 ## State
@@ -91,34 +100,62 @@
 1. ticker → election
 2. heartbeater → heartbeat
 
-# Note
+# Log Commit
 
-- implement election record
-- heartbeater → reset election timer
-- increase currentTerm in each triggerElection
-- each rpc request had timeout
-    - RPC_TIMEOUT_SEC
-- after getting voted from k node, do not send vote request again
-- replace term after voted or obtained heartbeat
-- prevote state
-- ticker function
-- the election timeouts are chosen from a range between 10–20 times the cluster’s one-way network latency
-- Joint Consensus Algorithm
+1. Normal commit
+    1. Leader success to commit log to most of followers
+    2. Leader update LeaderCommit
+2. Conflict log
+3. 
 
 ## RequestVote
+
+## 2A
 
 1. Candidate to Follower
 2. Candidate to Candidate
 
+## 2B
+
+1. Check raft node commit to local → update LeaderCommit
+2. Check LastLogIndex and LastLogTerm
+3. Follower get heartbeat from leader → update CommitIndex
+
 # Structure
 
-- 
+- [ ]  Refactor send RPC to peers
+
+# Log format
+
+- Peer number
+- Term
+- action
+
+# Note
+
+- Done
+    - [x]  implement election record
+    - [x]  heartbeater → reset election timer
+    - [x]  increase currentTerm in each triggerElection
+    - [x]  each rpc request had timeout
+        - RPC_TIMEOUT_SEC
+    - [x]  ticker function
+    - after getting voted from k node, do not send vote request again
+    - replace term after voted or obtained heartbeat
+    - the election timeouts are chosen from a range between 10–20 times the cluster’s one-way network latency
+- [ ]  prevote state
+- [ ]  Joint Consensus Algorithm
 
 # Issue
 
 - Node don’t trigger election after Leader is disconnect
     - time ticker
-- 
+- mutiple goroutine in trigger*
+- [ ]  Change Log    
+
+# Github flow
+
+- with test
 
 # Ref
 
