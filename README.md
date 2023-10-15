@@ -151,7 +151,43 @@
 - Node don’t trigger election after Leader is disconnect
     - time ticker
 - mutiple goroutine in trigger*
-- [ ]  Change Log    
+- [ ]  Change Log
+
+# Test Command
+
+## 2A
+
+- Test for single time
+    
+    ```go
+    go test --run TestInitialElection2A > ./log/TestInitialElection2A.log
+    go test --run TestReElection2A > ./log/TestReElection2A.log
+    go test --run TestManyElections2A > ./log/TestManyElections2A.log
+    ```
+    
+- Test for multiple time
+    
+    ```go
+    go test --failfast --count 30 --run TestInitialElection2A > ./log/TestInitialElection2A.log
+    go test --failfast --count 30 --run TestReElection2A > ./log/TestReElection2A.log
+    go test --failfast --count 30 --run TestManyElections2A > ./log/TestManyElections2A.log
+    ```
+    
+
+## 2B
+
+- Test for single time
+    
+    ```go
+    go test --run TestBasicAgree2B > ./log/TestBasicAgree2B.log
+    ```
+    
+- Test for multiple time
+    
+    ```go
+    go test --failfast --count 30 --run TestBasicAgree2B > ./log/TestBasicAgree2B.log
+    ```
+    
 
 # Github flow
 
