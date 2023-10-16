@@ -213,7 +213,7 @@ func (rf *Raft) RequestHeartbeat(req *AppendEntriesRequest, reply *AppendEntries
 		// TODO: multiple append?
 		// TODO: Append entries
 		fmt.Printf("[RequestHeartbeat] Raft: %v | Term: %v | Role: %v | Before rf.logEntries: %v\n", rf.me, rf.currentTerm, rf.role, len(rf.logEntries))
-		for i := rf.commitIndex; i < req.LeaderCommit; i++ {
+		for i := 0; i < len(req.Entries); i++ {
 			rf.logEntries = append(rf.logEntries, req.Entries[i])
 		}
 		rf.commitIndex++
@@ -371,14 +371,21 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			Index: rf.commitIndex,
 			Value: command,
 		}
+
+		// check repeat command
+		if len(rf.logEntries) > 0 && command == rf.logEntries[len(rf.logEntries)-1].Value {
+			return index, term, isLeader
+		}
+
 		rf.logEntries = append(rf.logEntries, entry)
 
+		var empty []Entry
 		appendEntriesRequest := &AppendEntriesRequest{
 			Term:         rf.currentTerm,
 			LeaderId:     rf.me,
 			PrevLogIndex: rf.commitIndex, //?
 			PrevLogTerm:  rf.currentTerm, //?
-			Entries:      rf.logEntries,
+			Entries:      append(empty, entry),
 			LeaderCommit: rf.commitIndex + 1,
 		}
 		isCommit := rf.sendRPC2Peers(appendEntriesRequest)
@@ -428,8 +435,6 @@ func (rf *Raft) triggerHeartbeat() {
 		LeaderId:     rf.me,
 		PrevLogIndex: rf.lastApplied,
 		PrevLogTerm:  rf.leaderCommit,
-		Entries:      rf.logEntries,
-		LeaderCommit: rf.leaderCommit,
 	}
 
 	lengthPeers := len(rf.peers)
@@ -601,6 +606,7 @@ func (rf *Raft) applyLog() {
 			select {
 			case rf.applyCh <- msg:
 				fmt.Printf("[applyLog] Raft: %v | Term: %v | Role: %v | lastApplied: %v | msg.CommandIndex: %v\n", rf.me, rf.currentTerm, rf.role, rf.lastApplied, msg.CommandIndex)
+				// TODO: Check rf.lastApplied
 				rf.lastApplied = Max(rf.lastApplied, msg.CommandIndex)
 			}
 		}
