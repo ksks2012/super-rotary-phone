@@ -120,6 +120,7 @@
 1. Check raft node commit to local → update LeaderCommit
 2. Check LastLogIndex and LastLogTerm
 3. Follower get heartbeat from leader → update CommitIndex
+4. Follower reply missing → Leader resend missing log
 
 # Structure
 
@@ -140,11 +141,13 @@
     - [x]  each rpc request had timeout
         - RPC_TIMEOUT_SEC
     - [x]  ticker function
+    - [x]  merge triggerHeartbeat and sendRPC2Peers
     - after getting voted from k node, do not send vote request again
     - replace term after voted or obtained heartbeat
     - the election timeouts are chosen from a range between 10–20 times the cluster’s one-way network latency
 - [ ]  prevote state
 - [ ]  Joint Consensus Algorithm
+- Leader only send current entry to followers
 
 # Issue
 
@@ -152,6 +155,7 @@
     - time ticker
 - mutiple goroutine in trigger*
 - [ ]  Change Log
+- How to re-send missing enties
 
 # Test Command
 
@@ -160,17 +164,17 @@
 - Test for single time
     
     ```go
-    go test --run TestInitialElection2A > ./log/TestInitialElection2A.log
-    go test --run TestReElection2A > ./log/TestReElection2A.log
-    go test --run TestManyElections2A > ./log/TestManyElections2A.log
+    go test --run TestInitialElection2A > ./log/2A/TestInitialElection2A.log
+    go test --run TestReElection2A > ./log/2A/TestReElection2A.log
+    go test --run TestManyElections2A > ./log/2A/TestManyElections2A.log
     ```
     
 - Test for multiple time
     
     ```go
-    go test --failfast --count 30 --run TestInitialElection2A > ./log/TestInitialElection2A.log
-    go test --failfast --count 30 --run TestReElection2A > ./log/TestReElection2A.log
-    go test --failfast --count 30 --run TestManyElections2A > ./log/TestManyElections2A.log
+    go test --failfast --count 30 --run TestInitialElection2A > ./log/2A/TestInitialElection2A.log
+    go test --failfast --count 30 --run TestReElection2A > ./log/2A/TestReElection2A.log
+    go test --failfast --count 30 --run TestManyElections2A > ./log/2A/TestManyElections2A.log
     ```
     
 
@@ -180,12 +184,16 @@
     
     ```go
     go test --run TestBasicAgree2B > ./log/TestBasicAgree2B.log
+    go test --run TestRPCBytes2B > ./log/TestRPCBytes2B.log
+    go test --run TestFailAgree2B > ./log/TestFailAgree2B.log
     ```
     
 - Test for multiple time
     
     ```go
     go test --failfast --count 30 --run TestBasicAgree2B > ./log/TestBasicAgree2B.log
+    go test --failfast --count 30 --run TestRPCBytes2B > ./log/TestRPCBytes2B.log
+    go test --failfast --count 30 --run TestFailAgree2B > ./log/TestFailAgree2B.log
     ```
     
 
