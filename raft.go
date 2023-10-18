@@ -30,9 +30,10 @@ import (
 	"6.824/src/labrpc"
 )
 
-var TIKER_SLEEP_SEC int64 = 200     //ms
-var HEATHBEAT_SLEEP_SEC int64 = 100 //ms
-var RPC_TIMEOUT_SEC int64 = 50      //ms
+var TIKER_SLEEP_SEC int64 = 300      //ms
+var HEATHBEAT_SLEEP_SEC int64 = 200  //ms
+var LOG_COMMIT_SLEEP_SEC int64 = 100 //ms
+var RPC_TIMEOUT_SEC int64 = 50       //ms
 
 type RaftRole int
 
@@ -96,7 +97,7 @@ type Raft struct {
 	// Applied to state machine
 	lastApplied int
 
-	// For leader
+	// TODO: For leader
 	nextIndex  []int
 	matchIndex []int
 }
@@ -182,8 +183,11 @@ func (req *AppendEntriesRequest) print() {
 }
 
 type AppendEntriesReply struct {
-	Term    int
-	Success bool
+	Term          int
+	Success       bool
+	LogState      int // State to append log entries
+	CurrentCommit int // Current commit of follower
+	CommitTerm    int // Term of current commit
 }
 
 func (rf *Raft) RequestHeartbeat(req *AppendEntriesRequest, reply *AppendEntriesReply) {
@@ -220,6 +224,12 @@ func (rf *Raft) RequestHeartbeat(req *AppendEntriesRequest, reply *AppendEntries
 		fmt.Printf("[RequestHeartbeat] Raft: %v | Term: %v | Role: %v | After rf.logEntries: %v\n", rf.me, rf.currentTerm, rf.role, len(rf.logEntries))
 		// TODO: Check log prevLogIndex, prevLogTerm
 		// TODO: Check log is not conflict
+	} else {
+		// TODO: revert commit
+		// TODO: set reply
+		// NOTE: Leader will re-send log entries
+		// reply.CurrentCommit = rf.commitIndex
+		// reply.CommitTerm = rf.logEntries[reply.CurrentCommit].Term
 	}
 }
 
@@ -299,7 +309,7 @@ func (rf *Raft) sendHeartbeat(server int, args *AppendEntriesRequest, reply *App
 	return ok
 }
 
-func (rf *Raft) sendRPC2Peers(request *AppendEntriesRequest) bool {
+func (rf *Raft) sendEntries2Peers(request *AppendEntriesRequest) bool {
 	lengthPeers := len(rf.peers)
 	replyChannel := make(chan int, lengthPeers-1)
 
@@ -317,11 +327,24 @@ func (rf *Raft) sendRPC2Peers(request *AppendEntriesRequest) bool {
 				select {
 				case err := <-c:
 					// use err and result
-					fmt.Printf("[sendRPC2Peers %v] %v\n", rf.me, err)
-					replyChannel <- 1
+					fmt.Printf("[sendEntries2Peers %v] %v\n", rf.me, err)
+					if appendEntriesReply.Success == true {
+						replyChannel <- 1
+					} else {
+						replyChannel <- 0
+					}
+					if appendEntriesReply.Term > rf.currentTerm {
+						rf.role = Follower
+						rf.votedFor = -1
+					}
+					// if appendEntriesReply.CurrentCommit < rf.commitIndex {
+					// 	fmt.Printf("[sendEntries2Peers] Raft: %v | Term: %v | Role: %v | Resend entries\n", rf.me, rf.currentTerm, rf.role)
+					// 	resendEntries := rf.genEntries(appendEntriesReply.CurrentCommit)
+					// 	rf.sendEntries2Peers(&resendEntries)
+					// }
 				case <-time.After(time.Duration(RPC_TIMEOUT_SEC) * time.Millisecond):
 					// call timed out
-					fmt.Printf("[sendRPC2Peers] Raft: %v | Term: %v | Role: %v | Timeout\n", rf.me, rf.currentTerm, rf.role)
+					fmt.Printf("[sendEntries2Peers] Raft: %v | Term: %v | Role: %v | Timeout\n", rf.me, rf.currentTerm, rf.role)
 					replyChannel <- 0
 					// TODO: retry if appendEntry failed
 				}
@@ -333,7 +356,7 @@ func (rf *Raft) sendRPC2Peers(request *AppendEntriesRequest) bool {
 	for i := 0; i < lengthPeers-1; i++ {
 		replyCount += <-replyChannel
 	}
-	fmt.Printf("[sendRPC2Peers] Raft: %v | Term: %v | Role: %v | replyCount: %v\n", rf.me, rf.currentTerm, rf.role, replyCount)
+	fmt.Printf("[sendEntries2Peers] Raft: %v | Term: %v | Role: %v | replyCount: %v\n", rf.me, rf.currentTerm, rf.role, replyCount)
 
 	if replyCount >= (len(rf.peers)+1)/2 {
 		return true
@@ -388,7 +411,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			Entries:      append(empty, entry),
 			LeaderCommit: rf.commitIndex + 1,
 		}
-		isCommit := rf.sendRPC2Peers(appendEntriesRequest)
+		isCommit := rf.sendEntries2Peers(appendEntriesRequest)
 
 		fmt.Printf("[Start] Raft: %v | Term: %v | Role: %v | isCommit: %v\n", rf.me, rf.currentTerm, rf.role, isCommit)
 
@@ -429,55 +452,44 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+func (rf *Raft) genEntries(currentFollowerCommit int) AppendEntriesRequest {
+	var entries []Entry
+	for i := currentFollowerCommit; i < rf.commitIndex; i++ {
+		entries = append(entries, rf.logEntries[i])
+	}
+	prevLogTerm := 0
+	prevLogTerm = entries[currentFollowerCommit-1].Term
+	resendEntries := AppendEntriesRequest{
+		Term:         rf.currentTerm,
+		LeaderId:     rf.me,
+		PrevLogIndex: rf.commitIndex,
+		PrevLogTerm:  prevLogTerm,
+		Entries:      entries,
+		LeaderCommit: rf.leaderCommit,
+	}
+
+	return resendEntries
+}
+
 func (rf *Raft) triggerHeartbeat() {
+	var entries []Entry
+	prevLogTerm := 0
+	if rf.commitIndex != 0 {
+		entries = append(entries, rf.logEntries[rf.commitIndex-1])
+		prevLogTerm = entries[0].Term
+	}
+
 	appendEntriesRequest := AppendEntriesRequest{
 		Term:         rf.currentTerm,
 		LeaderId:     rf.me,
-		PrevLogIndex: rf.lastApplied,
-		PrevLogTerm:  rf.leaderCommit,
+		PrevLogIndex: rf.commitIndex,
+		PrevLogTerm:  prevLogTerm,
+		Entries:      entries,
+		LeaderCommit: rf.leaderCommit,
 	}
 
-	lengthPeers := len(rf.peers)
-	totalHeartsbeat := make(chan int, lengthPeers-1)
-	var wg sync.WaitGroup
-	wg.Add(lengthPeers)
-	for i := 0; i < lengthPeers; i++ {
-		go func(i int) {
-			defer wg.Done()
-			appendEntriesReply := AppendEntriesReply{}
-			if i != rf.me {
-				c := make(chan bool, 1)
-				go func() {
-					c <- rf.sendHeartbeat(i, &appendEntriesRequest, &appendEntriesReply)
-				}()
-				select {
-				case err := <-c:
-					// use err and result
-					fmt.Printf("[triggerHeartbeat %v] %v\n", rf.me, err)
-					if appendEntriesReply.Success == true {
-						totalHeartsbeat <- 1
-					} else {
-						totalHeartsbeat <- 0
-					}
-					if appendEntriesReply.Term > rf.currentTerm {
-						rf.role = Follower
-						rf.votedFor = -1
-					}
-				case <-time.After(time.Duration(RPC_TIMEOUT_SEC) * time.Millisecond):
-					// call timed out
-					fmt.Printf("[triggerHeartbeat] Raft: %v | Term: %v | Role: %v | Timeout\n", rf.me, rf.currentTerm, rf.role)
-					totalHeartsbeat <- 0
-					// TODO: retry if appendEntry failed
-				}
-			}
-		}(i)
-	}
-	wg.Wait()
-	var heartsbeatCount = 1
-	for i := 0; i < lengthPeers-1; i++ {
-		heartsbeatCount += <-totalHeartsbeat
-	}
-	fmt.Printf("[triggerHeartbeat] Raft: %v | Term: %v | Role: %v | heartsbeatCount: %v\n", rf.me, rf.currentTerm, rf.role, heartsbeatCount)
+	result := rf.sendEntries2Peers(&appendEntriesRequest)
+	fmt.Printf("[triggerHeartbeat] Raft: %v | Term: %v | Role: %v | Result: %v\n", rf.me, rf.currentTerm, rf.role, result)
 }
 
 func (rf *Raft) triggerElection() {
@@ -587,7 +599,7 @@ func (rf *Raft) applyLog() {
 	for rf.killed() == false {
 		select {
 		case <-rf.applyLogTimer.C:
-			sleepSeconds := HEATHBEAT_SLEEP_SEC + (rand.Int63() % (HEATHBEAT_SLEEP_SEC))
+			sleepSeconds := LOG_COMMIT_SLEEP_SEC + (rand.Int63() % (LOG_COMMIT_SLEEP_SEC))
 			rf.applyLogTimer.Reset(time.Duration(sleepSeconds) * time.Millisecond)
 
 			fmt.Printf("[applyLog] Raft: %v | Term: %v | Role: %v | lastApplied: %v | rf.commitIndex: %v | log size: %v\n", rf.me, rf.currentTerm, rf.role, rf.lastApplied, rf.commitIndex, len(rf.logEntries))
@@ -597,7 +609,6 @@ func (rf *Raft) applyLog() {
 			}
 
 			log := rf.logEntries[i-1]
-			fmt.Printf("[applyLog] log: %+v\n", log)
 			if log.Index > rf.commitIndex {
 				break
 			}
@@ -651,7 +662,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.heartbeatTimer = time.NewTicker(time.Duration(sleepSeconds) * time.Millisecond)
 
 	// NOTE: self timer?
-	sleepSeconds = HEATHBEAT_SLEEP_SEC + (rand.Int63() % (HEATHBEAT_SLEEP_SEC))
+	sleepSeconds = LOG_COMMIT_SLEEP_SEC + (rand.Int63() % (LOG_COMMIT_SLEEP_SEC))
 	rf.applyLogTimer = time.NewTicker(time.Duration(sleepSeconds) * time.Millisecond)
 
 	go rf.heartbeater()
