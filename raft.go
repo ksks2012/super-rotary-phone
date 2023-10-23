@@ -98,6 +98,7 @@ type Raft struct {
 	lastApplied int
 
 	// TODO: For leader
+	// matchIndex -> resend?
 	nextIndex  []int
 	matchIndex []int
 }
@@ -172,8 +173,8 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 type AppendEntriesRequest struct {
 	Term         int
 	LeaderId     int
-	PrevLogIndex int
-	PrevLogTerm  int
+	PrevLogIndex int // Last commit index (?)
+	PrevLogTerm  int // Term in PrevLogIndex
 	Entries      []Entry
 	LeaderCommit int
 }
@@ -210,25 +211,34 @@ func (rf *Raft) RequestHeartbeat(req *AppendEntriesRequest, reply *AppendEntries
 
 	fmt.Printf("[RequestHeartbeat] Raft: %v | Term: %v | Role: %v | Commit Index: %v\n", rf.me, rf.currentTerm, rf.role, rf.commitIndex)
 	req.print()
+	if req.PrevLogIndex != rf.commitIndex {
+		reply.CurrentCommit = rf.commitIndex
+		reply.CommitTerm = 0
+		if len(rf.logEntries) > 0 && reply.CurrentCommit > 0 {
+			reply.CommitTerm = rf.logEntries[reply.CurrentCommit-1].Term
+		}
+	}
 	// TODO: Check entries
 	if req.LeaderCommit > rf.commitIndex {
 		// TODO: If leaderCommit > commitIndex => set commitIndex = min(leaderCommit, index of last new entry)
 		// rf.commitIndex = Min(req.LeaderCommit, rf.commitIndex)
 		// TODO: multiple append?
-		// TODO: Append entries
+		// TODO: Proccess conflict logs
 		fmt.Printf("[RequestHeartbeat] Raft: %v | Term: %v | Role: %v | Before rf.logEntries: %v\n", rf.me, rf.currentTerm, rf.role, len(rf.logEntries))
+		// Append all of log entry
 		for i := 0; i < len(req.Entries); i++ {
 			rf.logEntries = append(rf.logEntries, req.Entries[i])
+			rf.commitIndex++
 		}
-		rf.commitIndex++
 		fmt.Printf("[RequestHeartbeat] Raft: %v | Term: %v | Role: %v | After rf.logEntries: %v\n", rf.me, rf.currentTerm, rf.role, len(rf.logEntries))
+		reply.CurrentCommit = rf.commitIndex
 		// TODO: Check log prevLogIndex, prevLogTerm
 		// TODO: Check log is not conflict
 	} else {
 		// TODO: revert commit
 		// TODO: set reply
 		// NOTE: Leader will re-send log entries
-		// reply.CurrentCommit = rf.commitIndex
+		reply.CurrentCommit = rf.commitIndex
 		// reply.CommitTerm = rf.logEntries[reply.CurrentCommit].Term
 	}
 }
@@ -309,7 +319,7 @@ func (rf *Raft) sendHeartbeat(server int, args *AppendEntriesRequest, reply *App
 	return ok
 }
 
-func (rf *Raft) sendEntries2Peers(request *AppendEntriesRequest) bool {
+func (rf *Raft) sendEntries2Peers(request *AppendEntriesRequest, resend bool) bool {
 	lengthPeers := len(rf.peers)
 	replyChannel := make(chan int, lengthPeers-1)
 
@@ -337,11 +347,12 @@ func (rf *Raft) sendEntries2Peers(request *AppendEntriesRequest) bool {
 						rf.role = Follower
 						rf.votedFor = -1
 					}
-					// if appendEntriesReply.CurrentCommit < rf.commitIndex {
-					// 	fmt.Printf("[sendEntries2Peers] Raft: %v | Term: %v | Role: %v | Resend entries\n", rf.me, rf.currentTerm, rf.role)
-					// 	resendEntries := rf.genEntries(appendEntriesReply.CurrentCommit)
-					// 	rf.sendEntries2Peers(&resendEntries)
-					// }
+					// TODO: resend
+					fmt.Printf("[sendEntries2Peers] Raft: %v | Term: %v | Role: %v | Resend entries to %v: reply->%v cur->%v applied->%v\n", rf.me, rf.currentTerm, rf.role, i, appendEntriesReply.CurrentCommit, rf.commitIndex, rf.lastApplied)
+					if appendEntriesReply.CurrentCommit < rf.lastApplied && resend {
+						resendEntries := rf.genEntriesReq(appendEntriesReply.CurrentCommit)
+						rf.sendEntries2Peers(&resendEntries, false)
+					}
 				case <-time.After(time.Duration(RPC_TIMEOUT_SEC) * time.Millisecond):
 					// call timed out
 					fmt.Printf("[sendEntries2Peers] Raft: %v | Term: %v | Role: %v | Timeout\n", rf.me, rf.currentTerm, rf.role)
@@ -401,17 +412,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		}
 
 		rf.logEntries = append(rf.logEntries, entry)
-
-		var empty []Entry
-		appendEntriesRequest := &AppendEntriesRequest{
-			Term:         rf.currentTerm,
-			LeaderId:     rf.me,
-			PrevLogIndex: rf.commitIndex, //?
-			PrevLogTerm:  rf.currentTerm, //?
-			Entries:      append(empty, entry),
-			LeaderCommit: rf.commitIndex + 1,
-		}
-		isCommit := rf.sendEntries2Peers(appendEntriesRequest)
+		rf.leaderCommit++
+		appendEntriesRequest := rf.genEntriesReq(rf.commitIndex)
+		isCommit := rf.sendEntries2Peers(&appendEntriesRequest, true)
 
 		fmt.Printf("[Start] Raft: %v | Term: %v | Role: %v | isCommit: %v\n", rf.me, rf.currentTerm, rf.role, isCommit)
 
@@ -421,7 +424,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			// Update Leader
 			rf.commitIndex += 1
 		} else {
+			// revert log commit
 			rf.logEntries = rf.logEntries[:rf.commitIndex-1]
+			rf.leaderCommit--
 		}
 		index = rf.commitIndex
 		term = rf.currentTerm
@@ -452,13 +457,17 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
-func (rf *Raft) genEntries(currentFollowerCommit int) AppendEntriesRequest {
+func (rf *Raft) genEntriesReq(currentFollowerCommit int) AppendEntriesRequest {
+	// build request entry from currentFollowerCommit to last commit of leader
 	var entries []Entry
-	for i := currentFollowerCommit; i < rf.commitIndex; i++ {
+	for i := currentFollowerCommit; i < rf.leaderCommit; i++ {
 		entries = append(entries, rf.logEntries[i])
 	}
-	prevLogTerm := 0
-	prevLogTerm = entries[currentFollowerCommit-1].Term
+	// Obtain prevLogTerm
+	prevLogTerm := -1
+	if len(rf.logEntries) == 0 && rf.commitIndex != 0 {
+		prevLogTerm = entries[rf.commitIndex-1].Term
+	}
 	resendEntries := AppendEntriesRequest{
 		Term:         rf.currentTerm,
 		LeaderId:     rf.me,
@@ -467,28 +476,13 @@ func (rf *Raft) genEntries(currentFollowerCommit int) AppendEntriesRequest {
 		Entries:      entries,
 		LeaderCommit: rf.leaderCommit,
 	}
-
+	fmt.Printf("[genEntries] Raft: %v | Term: %v | Role: %v | size of entries: %v\n", rf.me, rf.currentTerm, rf.role, len(resendEntries.Entries))
 	return resendEntries
 }
 
 func (rf *Raft) triggerHeartbeat() {
-	var entries []Entry
-	prevLogTerm := 0
-	if rf.commitIndex != 0 {
-		entries = append(entries, rf.logEntries[rf.commitIndex-1])
-		prevLogTerm = entries[0].Term
-	}
-
-	appendEntriesRequest := AppendEntriesRequest{
-		Term:         rf.currentTerm,
-		LeaderId:     rf.me,
-		PrevLogIndex: rf.commitIndex,
-		PrevLogTerm:  prevLogTerm,
-		Entries:      entries,
-		LeaderCommit: rf.leaderCommit,
-	}
-
-	result := rf.sendEntries2Peers(&appendEntriesRequest)
+	appendEntriesRequest := rf.genEntriesReq(rf.commitIndex)
+	result := rf.sendEntries2Peers(&appendEntriesRequest, true)
 	fmt.Printf("[triggerHeartbeat] Raft: %v | Term: %v | Role: %v | Result: %v\n", rf.me, rf.currentTerm, rf.role, result)
 }
 
@@ -650,6 +644,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// 2B: log entries
 	rf.commitIndex = 0
 	rf.lastApplied = 0
+	// TODO: Add a empty entry in logEntries when initialation
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
