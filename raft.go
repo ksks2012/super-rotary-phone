@@ -27,7 +27,7 @@ import (
 	"time"
 
 	//	"6.824/labgob"
-	"6.824/src/labrpc"
+	"github.com/ksks2012/super-rotary-phone/labrpc"
 )
 
 var TIKER_SLEEP_SEC int64 = 300      //ms

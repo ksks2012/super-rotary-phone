@@ -16,8 +16,8 @@ import (
 	"sync"
 	"testing"
 
-	"6.824/src/labgob"
-	"6.824/src/labrpc"
+	"github.com/ksks2012/super-rotary-phone/labgob"
+	"github.com/ksks2012/super-rotary-phone/labrpc"
 
 	crand "crypto/rand"
 	"encoding/base64"
