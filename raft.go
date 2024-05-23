@@ -216,7 +216,7 @@ func (rf *Raft) RequestHeartbeat(req *AppendEntriesRequest, reply *AppendEntries
 			reply.CommitTerm = rf.logEntries[reply.CurrentCommit-1].Term
 		}
 	}
-	// TODO: Check entries
+	// log entries from leader had updated
 	if req.LeaderCommit > rf.commitIndex {
 		// TODO: If leaderCommit > commitIndex => set commitIndex = min(leaderCommit, index of last new entry)
 		// rf.commitIndex = Min(req.LeaderCommit, rf.commitIndex)
@@ -317,7 +317,7 @@ func (rf *Raft) sendHeartbeat(server int, args *AppendEntriesRequest, reply *App
 	return ok
 }
 
-func (rf *Raft) sendEntries2Peers(request *AppendEntriesRequest, resend bool) bool {
+func (rf *Raft) sendEntries2Peers(resend bool) bool {
 	lengthPeers := len(rf.peers)
 	replyChannel := make(chan int, lengthPeers-1)
 
@@ -326,11 +326,12 @@ func (rf *Raft) sendEntries2Peers(request *AppendEntriesRequest, resend bool) bo
 	for i := 0; i < lengthPeers; i++ {
 		go func(i int) {
 			defer wg.Done()
-			appendEntriesReply := AppendEntriesReply{}
 			if i != rf.me {
+				appendEntriesRequest := rf.genEntriesReq(i, rf.commitIndex)
+				appendEntriesReply := AppendEntriesReply{}
 				c := make(chan bool, 1)
 				go func() {
-					c <- rf.sendHeartbeat(i, request, &appendEntriesReply)
+					c <- rf.sendHeartbeat(i, &appendEntriesRequest, &appendEntriesReply)
 				}()
 				select {
 				case err := <-c:
@@ -345,12 +346,12 @@ func (rf *Raft) sendEntries2Peers(request *AppendEntriesRequest, resend bool) bo
 						rf.role = Follower
 						rf.votedFor = -1
 					}
-					// TODO: resend
 					fmt.Printf("[sendEntries2Peers] Raft: %v | Term: %v | Role: %v | Resend entries to %v: reply->%v cur->%v applied->%v\n", rf.me, rf.currentTerm, rf.role, i, appendEntriesReply.CurrentCommit, rf.commitIndex, rf.lastApplied)
-					if appendEntriesReply.CurrentCommit < rf.lastApplied && resend {
-						resendEntries := rf.genEntriesReq(appendEntriesReply.CurrentCommit)
-						rf.sendEntries2Peers(&resendEntries, false)
-					}
+					// TODO: resend
+					// if appendEntriesReply.CurrentCommit < rf.lastApplied && resend {
+					// 	resendEntries := rf.genEntriesReq(appendEntriesReply.CurrentCommit)
+					// 	rf.sendEntries2Peers(&resendEntries, false)
+					// }
 				case <-time.After(time.Duration(RPC_TIMEOUT_SEC) * time.Millisecond):
 					// call timed out
 					fmt.Printf("[sendEntries2Peers] Raft: %v | Term: %v | Role: %v | Timeout\n", rf.me, rf.currentTerm, rf.role)
@@ -382,7 +383,7 @@ type AppendApplyRequest struct {
 	LeaderCommit int
 }
 
-func (rf *Raft) RequestCommit(req *AppendApplyRequest, reply *AppendEntriesReply) {
+func (rf *Raft) RequestApply(req *AppendApplyRequest, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
@@ -394,13 +395,12 @@ func (rf *Raft) RequestCommit(req *AppendApplyRequest, reply *AppendEntriesReply
 	}
 	rf.role = Follower
 	rf.currentTerm = req.Term
-	rf.votedFor = req.LeaderId
 
 	// Reset election timer
 	sleepSeconds := TIKER_SLEEP_SEC + (rand.Int63() % (TIKER_SLEEP_SEC))
 	rf.electionTimer.Reset(time.Duration(sleepSeconds) * time.Millisecond)
 
-	fmt.Printf("[RequestCommit] Raft: %v | Term: %v | Role: %v | Commit Index: %v\n", rf.me, rf.currentTerm, rf.role, rf.commitIndex)
+	fmt.Printf("[RequestApply] Raft: %v | Term: %v | Role: %v | Commit Index: %v\n", rf.me, rf.currentTerm, rf.role, rf.commitIndex)
 
 	if req.LeaderCommit > rf.commitIndex {
 		// fail to copy
@@ -411,12 +411,12 @@ func (rf *Raft) RequestCommit(req *AppendApplyRequest, reply *AppendEntriesReply
 	}
 }
 
-func (rf *Raft) sendCommit(server int, args *AppendApplyRequest, reply *AppendEntriesReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestCommit", args, reply)
+func (rf *Raft) sendApply(server int, args *AppendApplyRequest, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.RequestApply", args, reply)
 	return ok
 }
 
-// sendCommit2Peers sends the AppendEntriesRequest to all peers in the Raft cluster and waits for their replies.
+// sendApply2Peers sends the AppendEntriesRequest to all peers in the Raft cluster and waits for their replies.
 // It returns the number of successful replies received.
 // If resend is true, it will resend the entries to peers that have a lower commit index than the last applied index.
 // Parameters:
@@ -425,7 +425,7 @@ func (rf *Raft) sendCommit(server int, args *AppendApplyRequest, reply *AppendEn
 //
 // Returns:
 //   - The number of successful replies received.
-func (rf *Raft) sendCommit2Peers(request *AppendApplyRequest, resend bool) int {
+func (rf *Raft) sendApply2Peers(request *AppendApplyRequest, resend bool) int {
 	lengthPeers := len(rf.peers)
 	replyChannel := make(chan int, lengthPeers-1)
 
@@ -438,7 +438,7 @@ func (rf *Raft) sendCommit2Peers(request *AppendApplyRequest, resend bool) int {
 			if i != rf.me {
 				c := make(chan bool, 1)
 				go func() {
-					c <- rf.sendCommit(i, request, &appendEntriesReply)
+					c <- rf.sendApply(i, request, &appendEntriesReply)
 				}()
 				select {
 				case err := <-c:
@@ -456,10 +456,6 @@ func (rf *Raft) sendCommit2Peers(request *AppendApplyRequest, resend bool) int {
 						rf.votedFor = -1
 					}
 					// TODO: resend
-					if appendEntriesReply.CurrentCommit < rf.lastApplied && resend {
-						resendEntries := rf.genEntriesReq(appendEntriesReply.CurrentCommit)
-						rf.sendEntries2Peers(&resendEntries, false)
-					}
 				case <-time.After(time.Duration(RPC_TIMEOUT_SEC) * time.Millisecond):
 					// call timed out
 					replyChannel <- 0
@@ -517,26 +513,19 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 		rf.logEntries = append(rf.logEntries, entry)
 		rf.commitIndex++
-		// TODO: generate AppendEntriesRequest by nextIndex
-		appendEntriesRequest := rf.genEntriesReq(rf.commitIndex)
 		// Send entries to peers for applying
-		isCommited := rf.sendEntries2Peers(&appendEntriesRequest, true)
+		isCommited := rf.sendEntries2Peers(true)
 
 		// update leaderCommit
 		if isCommited {
 			// TODO: send apply to followers
-
 			commitRequest := AppendApplyRequest{
-				Term:         appendEntriesRequest.Term,
-				LeaderId:     appendEntriesRequest.LeaderId,
-				PrevLogIndex: appendEntriesRequest.PrevLogIndex,
-				PrevLogTerm:  appendEntriesRequest.PrevLogTerm,
-				LeaderCommit: appendEntriesRequest.LeaderCommit,
+				Term:         rf.currentTerm,
+				LeaderCommit: rf.commitIndex,
 			}
-			appliedCount := rf.sendCommit2Peers(&commitRequest, false)
+			appliedCount := rf.sendApply2Peers(&commitRequest, false)
 			if appliedCount >= (len(rf.peers)+1)/2 {
 				// Update Leader
-				rf.lastApplied = rf.commitIndex
 				rf.applyLog()
 			} else {
 				// revert log commit
@@ -577,9 +566,11 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
-func (rf *Raft) genEntriesReq(currentFollowerCommit int) AppendEntriesRequest {
+func (rf *Raft) genEntriesReq(peerIndex int, currentFollowerCommit int) AppendEntriesRequest {
+	fmt.Printf("[genEntries] Raft: %v | Term: %v | Role: %v | peerIndex: %v | rf.nextIndex[peerIndex]: %v | rf.commitIndex: %v\n", rf.me, rf.currentTerm, rf.role, peerIndex, rf.nextIndex[peerIndex], rf.commitIndex)
 	// build request entry from currentFollowerCommit to last commit of leader
 	var entries []Entry
+	// TODO: generate AppendEntriesRequest by nextIndex
 	for i := rf.lastApplied; i < rf.commitIndex; i++ {
 		entries = append(entries, rf.logEntries[i])
 	}
@@ -601,8 +592,7 @@ func (rf *Raft) genEntriesReq(currentFollowerCommit int) AppendEntriesRequest {
 }
 
 func (rf *Raft) triggerHeartbeat() {
-	appendEntriesRequest := rf.genEntriesReq(rf.commitIndex)
-	result := rf.sendEntries2Peers(&appendEntriesRequest, true)
+	result := rf.sendEntries2Peers(true)
 	fmt.Printf("[triggerHeartbeat] Raft: %v | Term: %v | Role: %v | Result: %v\n", rf.me, rf.currentTerm, rf.role, result)
 }
 
