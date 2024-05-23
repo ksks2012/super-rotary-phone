@@ -446,7 +446,7 @@ func (rf *Raft) sendApply2Peers(request *AppendApplyRequest, resend bool) int {
 					fmt.Printf("[sendCommit2Peers %v] %v\n", rf.me, err)
 					// Update nextIndex by reply if successful commit
 					if appendEntriesReply.Success {
-						rf.nextIndex[i] = appendEntriesReply.CurrentCommit + 1
+						rf.nextIndex[i] = appendEntriesReply.CurrentCommit
 						replyChannel <- 1
 					} else {
 						replyChannel <- 0
@@ -571,7 +571,7 @@ func (rf *Raft) genEntriesReq(peerIndex int, currentFollowerCommit int) AppendEn
 	// build request entry from currentFollowerCommit to last commit of leader
 	var entries []Entry
 	// TODO: generate AppendEntriesRequest by nextIndex
-	for i := rf.lastApplied; i < rf.commitIndex; i++ {
+	for i := rf.nextIndex[peerIndex]; i < currentFollowerCommit; i++ {
 		entries = append(entries, rf.logEntries[i])
 	}
 	// Obtain prevLogTerm
