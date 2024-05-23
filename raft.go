@@ -85,11 +85,10 @@ type Raft struct {
 
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	role         RaftRole
-	currentTerm  int
-	votedFor     int
-	logEntries   []Entry
-	leaderCommit int
+	role        RaftRole
+	currentTerm int
+	votedFor    int
+	logEntries  []Entry
 
 	// Known to be committed
 	commitIndex int
@@ -375,7 +374,7 @@ func (rf *Raft) sendEntries2Peers(request *AppendEntriesRequest, resend bool) bo
 	}
 }
 
-type AppendCommitRequest struct {
+type AppendApplyRequest struct {
 	Term         int
 	LeaderId     int
 	PrevLogIndex int // Last commit index (?)
@@ -383,7 +382,7 @@ type AppendCommitRequest struct {
 	LeaderCommit int
 }
 
-func (rf *Raft) RequestCommit(req *AppendCommitRequest, reply *AppendEntriesReply) {
+func (rf *Raft) RequestCommit(req *AppendApplyRequest, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
@@ -412,7 +411,7 @@ func (rf *Raft) RequestCommit(req *AppendCommitRequest, reply *AppendEntriesRepl
 	}
 }
 
-func (rf *Raft) sendCommit(server int, args *AppendCommitRequest, reply *AppendEntriesReply) bool {
+func (rf *Raft) sendCommit(server int, args *AppendApplyRequest, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestCommit", args, reply)
 	return ok
 }
@@ -426,7 +425,7 @@ func (rf *Raft) sendCommit(server int, args *AppendCommitRequest, reply *AppendE
 //
 // Returns:
 //   - The number of successful replies received.
-func (rf *Raft) sendCommit2Peers(request *AppendCommitRequest, resend bool) int {
+func (rf *Raft) sendCommit2Peers(request *AppendApplyRequest, resend bool) int {
 	lengthPeers := len(rf.peers)
 	replyChannel := make(chan int, lengthPeers-1)
 
@@ -508,44 +507,46 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			Value: command,
 		}
 
+		// reset commit index
+		rf.commitIndex = rf.lastApplied
+
 		// check repeat command
 		if len(rf.logEntries) > 0 && command == rf.logEntries[len(rf.logEntries)-1].Value {
 			return index, term, isLeader
 		}
 
 		rf.logEntries = append(rf.logEntries, entry)
-		rf.leaderCommit++
+		rf.commitIndex++
 		// TODO: generate AppendEntriesRequest by nextIndex
 		appendEntriesRequest := rf.genEntriesReq(rf.commitIndex)
 		// Send entries to peers for applying
-		isCopied := rf.sendEntries2Peers(&appendEntriesRequest, true)
+		isCommited := rf.sendEntries2Peers(&appendEntriesRequest, true)
 
-		// TODO: Check half peer?
 		// update leaderCommit
-		if isCopied {
-			// TODO: send commit to followers
+		if isCommited {
+			// TODO: send apply to followers
 
-			commitRequest := AppendCommitRequest{
+			commitRequest := AppendApplyRequest{
 				Term:         appendEntriesRequest.Term,
 				LeaderId:     appendEntriesRequest.LeaderId,
 				PrevLogIndex: appendEntriesRequest.PrevLogIndex,
 				PrevLogTerm:  appendEntriesRequest.PrevLogTerm,
 				LeaderCommit: appendEntriesRequest.LeaderCommit,
 			}
-			commitCount := rf.sendCommit2Peers(&commitRequest, false)
-			if commitCount >= (len(rf.peers)+1)/2 {
+			appliedCount := rf.sendCommit2Peers(&commitRequest, false)
+			if appliedCount >= (len(rf.peers)+1)/2 {
 				// Update Leader
-				rf.commitIndex += 1
+				rf.lastApplied = rf.commitIndex
 				rf.applyLog()
 			} else {
 				// revert log commit
 				rf.logEntries = rf.logEntries[:rf.commitIndex-1]
-				rf.leaderCommit--
+				rf.commitIndex = rf.lastApplied
 			}
 		} else {
 			// revert log commit
 			rf.logEntries = rf.logEntries[:rf.commitIndex-1]
-			rf.leaderCommit--
+			rf.commitIndex = rf.lastApplied
 		}
 		index = rf.commitIndex
 		term = rf.currentTerm
@@ -579,7 +580,7 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) genEntriesReq(currentFollowerCommit int) AppendEntriesRequest {
 	// build request entry from currentFollowerCommit to last commit of leader
 	var entries []Entry
-	for i := currentFollowerCommit; i < rf.leaderCommit; i++ {
+	for i := rf.lastApplied; i < rf.commitIndex; i++ {
 		entries = append(entries, rf.logEntries[i])
 	}
 	// Obtain prevLogTerm
@@ -590,10 +591,10 @@ func (rf *Raft) genEntriesReq(currentFollowerCommit int) AppendEntriesRequest {
 	resendEntries := AppendEntriesRequest{
 		Term:         rf.currentTerm,
 		LeaderId:     rf.me,
-		PrevLogIndex: rf.commitIndex,
+		PrevLogIndex: rf.lastApplied,
 		PrevLogTerm:  prevLogTerm,
 		Entries:      entries,
-		LeaderCommit: rf.leaderCommit,
+		LeaderCommit: rf.commitIndex,
 	}
 	fmt.Printf("[genEntries] Raft: %v | Term: %v | Role: %v | size of entries: %v\n", rf.me, rf.currentTerm, rf.role, len(resendEntries.Entries))
 	return resendEntries
