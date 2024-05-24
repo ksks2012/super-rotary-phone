@@ -222,6 +222,7 @@ func (rf *Raft) RequestHeartbeat(req *AppendEntriesRequest, reply *AppendEntries
 		// rf.commitIndex = Min(req.LeaderCommit, rf.commitIndex)
 		// TODO: multiple append?
 		// TODO: Proccess conflict logs
+		// TODO: Clean log entries by checking last term of log
 		fmt.Printf("[RequestHeartbeat] Raft: %v | Term: %v | Role: %v | Before rf.logEntries: %v\n", rf.me, rf.currentTerm, rf.role, len(rf.logEntries))
 		// Append all of log entry
 		for i := 0; i < len(req.Entries); i++ {
@@ -265,11 +266,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	fmt.Printf("[RequestVote] Raft: %v | Term: %v | Role: %v | Votereq from %v(%v)\n", rf.me, rf.currentTerm, rf.role, args.CandidateId, args.Term)
+	fmt.Printf("[RequestVote] Raft: %v | Term: %v | Role: %v | Votereq from %v(%v) | rf.commitIndex: %v | args.LastLogIndex: %v\n", rf.me, rf.currentTerm, rf.role, args.CandidateId, args.Term, rf.commitIndex, args.LastLogIndex)
 	reply.Term = 0
 	reply.VoteGranted = false
 
-	if args.Term > rf.currentTerm && rf.role != Candidate {
+	if args.Term > rf.currentTerm && rf.role != Candidate && rf.commitIndex <= args.LastLogIndex {
 		reply.Term = args.Term
 		reply.VoteGranted = true
 
@@ -443,7 +444,7 @@ func (rf *Raft) sendApply2Peers(request *AppendApplyRequest, resend bool) int {
 				select {
 				case err := <-c:
 					// use err and result
-					fmt.Printf("[sendCommit2Peers %v] %v\n", rf.me, err)
+					fmt.Printf("[sendApply2Peers %v] %v\n", rf.me, err)
 					// Update nextIndex by reply if successful commit
 					if appendEntriesReply.Success {
 						rf.nextIndex[i] = appendEntriesReply.CurrentCommit
@@ -469,7 +470,7 @@ func (rf *Raft) sendApply2Peers(request *AppendApplyRequest, resend bool) int {
 	for i := 0; i < lengthPeers-1; i++ {
 		replyCount += <-replyChannel
 	}
-	fmt.Printf("[sendCommit2Peers] Raft: %v | Term: %v | Role: %v | replyCount: %v\n", rf.me, rf.currentTerm, rf.role, replyCount)
+	fmt.Printf("[sendApply2Peers] Raft: %v | Term: %v | Role: %v | replyCount: %v\n", rf.me, rf.currentTerm, rf.role, replyCount)
 	return replyCount
 }
 
@@ -527,6 +528,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			if appliedCount >= (len(rf.peers)+1)/2 {
 				// Update Leader
 				rf.applyLog()
+				rf.currentTerm++
 			} else {
 				// revert log commit
 				rf.logEntries = rf.logEntries[:rf.commitIndex-1]
@@ -601,7 +603,7 @@ func (rf *Raft) triggerElection() {
 		Term:        rf.currentTerm + 1,
 		CandidateId: rf.me,
 		// TODO:
-		LastLogIndex: 0,
+		LastLogIndex: rf.commitIndex,
 		LastLogTerm:  rf.currentTerm,
 	}
 
@@ -713,12 +715,15 @@ func (rf *Raft) applyLog() {
 		return
 	}
 
-	msg := ApplyMsg{CommandValid: true, Command: log.Value, CommandIndex: log.Index + 1}
-	select {
-	case rf.applyCh <- msg:
-		fmt.Printf("[applyLog] Raft: %v | Term: %v | Role: %v | lastApplied: %v | msg.CommandIndex: %v\n", rf.me, rf.currentTerm, rf.role, rf.lastApplied, msg.CommandIndex)
-		// TODO: Check rf.lastApplied
-		rf.lastApplied = Max(rf.lastApplied, msg.CommandIndex)
+	for j := rf.lastApplied; j < len(rf.logEntries); j++ {
+		fmt.Printf("[applyLog] Raft: %v | Term: %v | Role: %v | rf.logEntries[j]: %v\n", rf.me, rf.currentTerm, rf.role, rf.logEntries[j])
+		msg := ApplyMsg{CommandValid: true, Command: rf.logEntries[j].Value, CommandIndex: j + 1}
+		select {
+		case rf.applyCh <- msg:
+			fmt.Printf("[applyLog] Raft: %v | Term: %v | Role: %v | lastApplied: %v | msg: %v\n", rf.me, rf.currentTerm, rf.role, rf.lastApplied, msg)
+			// TODO: Check rf.lastApplied
+			rf.lastApplied = Max(rf.lastApplied, msg.CommandIndex)
+		}
 	}
 }
 
